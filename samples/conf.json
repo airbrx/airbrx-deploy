@@ -1,0 +1,23 @@
+{
+  "tenantId": "{gateway-fqdn}",
+  "tenantName": "Example Tenant",
+  "dataAdapter": {
+    "type": "snowflake",
+    "server_hostname": "your-account.snowflakecomputing.com",
+    "http_path": "",
+    "cloudFilesBaseUrl": "https://{gateway-fqdn}",
+    "disableSessionSpoofing": false,
+    "disableOperationSpoofing": false
+  },
+  "storage": {
+    "type": "s3",
+    "bucket": "{prefix}-airbrx-gateway-storage",
+    "region": "{region}",
+    "basePath": "storage"
+  },
+  "logging": {
+    "logToFile": true,
+    "logRequests": true,
+    "logLevel": "info"
+  }
+}

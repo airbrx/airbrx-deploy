@@ -1,0 +1,66 @@
+{
+  "version": "1.0",
+  "tenantId": "{gateway-fqdn}",
+  "lastUpdated": "{timestamp}",
+  "defaults": {
+    "cacheKeyElements": [
+      "userId",
+      "standardizedSql"
+    ],
+    "ttlSeconds": 3600,
+    "version": 1
+  },
+  "rules": [
+    {
+      "id": "no-cache-writes",
+      "name": "No Cache for Write Operations",
+      "description": "Never cache INSERT, UPDATE, DELETE, CREATE, DROP operations",
+      "enabled": true,
+      "priority": 5,
+      "mode": "all",
+      "conditions": {
+        "statementType": {
+          "in": [
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "CREATE",
+            "DROP",
+            "ALTER",
+            "TRUNCATE"
+          ]
+        }
+      },
+      "actions": {
+        "cacheKeyElements": [],
+        "cache": {
+          "ttlSeconds": 0
+        },
+        "version": 1
+      }
+    },
+    {
+      "id": "cache-select-queries",
+      "name": "Cache SELECT Queries",
+      "description": "Cache SELECT queries with 24 hour TTL",
+      "enabled": true,
+      "priority": 15,
+      "mode": "all",
+      "conditions": {
+        "statementType": {
+          "equals": "SELECT"
+        }
+      },
+      "actions": {
+        "cacheKeyElements": [
+          "userId",
+          "standardizedSql"
+        ],
+        "cache": {
+          "ttlSeconds": 86400
+        },
+        "version": 1
+      }
+    }
+  ]
+}
