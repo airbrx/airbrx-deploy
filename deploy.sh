@@ -477,6 +477,7 @@ deploy_lambda "$LOGSUMMARY_FUNC" "$LOGSUMMARY_ROLE_ARN" "lambda-handler.handler"
 print_header "Phase 8b: Creating CloudFront for API Endpoints"
 
 # Helper to create CloudFront distribution for Lambda Function URL with OAC
+# Note: All print output goes to stderr so stdout can return the URL
 create_lambda_cloudfront() {
     local name="$1"
     local lambda_url="$2"
@@ -491,7 +492,7 @@ create_lambda_cloudfront() {
         --output text 2>/dev/null | head -1)
 
     if [[ -n "$existing_dist" && "$existing_dist" != "None" ]]; then
-        print_step "$name: Distribution exists ($existing_dist)"
+        echo -e "${GREEN}▶${NC} $name: Distribution exists ($existing_dist)" >&2
         dist_id="$existing_dist"
         dist_domain=$(aws cloudfront get-distribution --id "$dist_id" --query 'Distribution.DomainName' --output text)
     else
@@ -501,13 +502,13 @@ create_lambda_cloudfront() {
             "OriginAccessControlList.Items[?Name=='${oac_name}'].Id" --output text 2>/dev/null)
 
         if [[ -z "$oac_id" || "$oac_id" == "None" ]]; then
-            print_step "Creating OAC for $name..."
+            echo -e "${GREEN}▶${NC} Creating OAC for $name..." >&2
             oac_id=$(aws cloudfront create-origin-access-control --origin-access-control-config \
                 "Name=${oac_name},SigningProtocol=sigv4,SigningBehavior=always,OriginAccessControlOriginType=lambda" \
                 --query 'OriginAccessControl.Id' --output text)
         fi
 
-        print_step "Creating CloudFront distribution for $name..."
+        echo -e "${GREEN}▶${NC} Creating CloudFront distribution for $name..." >&2
 
         local dist_config=$(cat <<EOFCF
 {
@@ -551,16 +552,16 @@ EOFCF
         dist_domain=$(aws cloudfront get-distribution --id "$dist_id" \
             --query 'Distribution.DomainName' --output text)
 
-        print_success "$name CloudFront: https://${dist_domain}"
+        echo -e "${GREEN}✓${NC} $name CloudFront: https://${dist_domain}" >&2
     fi
 
     # Always ensure Lambda permission exists for CloudFront OAC
-    print_step "Ensuring CloudFront permission for $name Lambda..."
+    echo -e "${GREEN}▶${NC} Ensuring CloudFront permission for $name Lambda..." >&2
     local stmt_id="CloudFrontOAC-${dist_id}"
 
     # Check if permission already exists
     if aws lambda get-policy --function-name "$func_name" 2>/dev/null | grep -q "$stmt_id"; then
-        print_step "$name Lambda permission already exists"
+        echo -e "${GREEN}▶${NC} $name Lambda permission already exists" >&2
     else
         if aws lambda add-permission --function-name "$func_name" \
             --statement-id "$stmt_id" \
@@ -568,9 +569,9 @@ EOFCF
             --principal cloudfront.amazonaws.com \
             --source-arn "arn:aws:cloudfront::${AWS_ACCOUNT_ID}:distribution/${dist_id}" \
             --function-url-auth-type AWS_IAM 2>/dev/null; then
-            print_success "$name Lambda permission added"
+            echo -e "${GREEN}✓${NC} $name Lambda permission added" >&2
         else
-            print_warning "$name Lambda permission may already exist or failed to add"
+            echo -e "${YELLOW}⚠${NC} $name Lambda permission may already exist or failed to add" >&2
         fi
     fi
 
