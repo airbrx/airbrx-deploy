@@ -200,10 +200,10 @@ delete_oac() {
     fi
 }
 
-# Delete all CloudFront distributions
-delete_cloudfront "Frontend" "${PREFIX}"
-delete_cloudfront "API" "${PREFIX}-api"
-delete_cloudfront "Gateway" "${PREFIX}-gateway"
+# Delete all CloudFront distributions (search patterns must match deploy.sh comments)
+delete_cloudfront "Frontend" "Airbrx App - ${PREFIX}"
+delete_cloudfront "API" "Airbrx api - ${PREFIX}"
+delete_cloudfront "Gateway" "Airbrx gateway - ${PREFIX}"
 
 # Delete all OACs
 delete_oac "${PREFIX}-airbrx-app-oac"

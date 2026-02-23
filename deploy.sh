@@ -482,6 +482,8 @@ create_lambda_cloudfront() {
     local lambda_url="$2"
     local func_name="$3"
     local origin_domain=$(echo "$lambda_url" | sed 's|https://||' | sed 's|/$||')
+    local dist_id=""
+    local dist_domain=""
 
     # Check if distribution already exists
     local existing_dist=$(aws cloudfront list-distributions --query \
@@ -490,25 +492,24 @@ create_lambda_cloudfront() {
 
     if [[ -n "$existing_dist" && "$existing_dist" != "None" ]]; then
         print_step "$name: Distribution exists ($existing_dist)"
-        echo "https://$(aws cloudfront get-distribution --id "$existing_dist" --query 'Distribution.DomainName' --output text)/"
-        return
-    fi
+        dist_id="$existing_dist"
+        dist_domain=$(aws cloudfront get-distribution --id "$dist_id" --query 'Distribution.DomainName' --output text)
+    else
+        # Create OAC for Lambda
+        local oac_name="${PREFIX}-${name}-oac"
+        local oac_id=$(aws cloudfront list-origin-access-controls --query \
+            "OriginAccessControlList.Items[?Name=='${oac_name}'].Id" --output text 2>/dev/null)
 
-    # Create OAC for Lambda
-    local oac_name="${PREFIX}-${name}-oac"
-    local oac_id=$(aws cloudfront list-origin-access-controls --query \
-        "OriginAccessControlList.Items[?Name=='${oac_name}'].Id" --output text 2>/dev/null)
+        if [[ -z "$oac_id" || "$oac_id" == "None" ]]; then
+            print_step "Creating OAC for $name..."
+            oac_id=$(aws cloudfront create-origin-access-control --origin-access-control-config \
+                "Name=${oac_name},SigningProtocol=sigv4,SigningBehavior=always,OriginAccessControlOriginType=lambda" \
+                --query 'OriginAccessControl.Id' --output text)
+        fi
 
-    if [[ -z "$oac_id" || "$oac_id" == "None" ]]; then
-        print_step "Creating OAC for $name..."
-        oac_id=$(aws cloudfront create-origin-access-control --origin-access-control-config \
-            "Name=${oac_name},SigningProtocol=sigv4,SigningBehavior=always,OriginAccessControlOriginType=lambda" \
-            --query 'OriginAccessControl.Id' --output text)
-    fi
+        print_step "Creating CloudFront distribution for $name..."
 
-    print_step "Creating CloudFront distribution for $name..."
-
-    local dist_config=$(cat <<EOFCF
+        local dist_config=$(cat <<EOFCF
 {
     "CallerReference": "${PREFIX}-${name}-$(date +%s)",
     "Comment": "Airbrx ${name} - ${PREFIX}",
@@ -544,22 +545,35 @@ create_lambda_cloudfront() {
 EOFCF
 )
 
-    local dist_id=$(aws cloudfront create-distribution --distribution-config "$dist_config" \
-        --query 'Distribution.Id' --output text)
+        dist_id=$(aws cloudfront create-distribution --distribution-config "$dist_config" \
+            --query 'Distribution.Id' --output text)
 
-    # Add Lambda permission for CloudFront OAC
-    print_step "Adding CloudFront permission to $name Lambda..."
-    aws lambda add-permission --function-name "$func_name" \
-        --statement-id "CloudFrontOAC-${dist_id}" \
-        --action lambda:InvokeFunctionUrl \
-        --principal cloudfront.amazonaws.com \
-        --source-arn "arn:aws:cloudfront::${AWS_ACCOUNT_ID}:distribution/${dist_id}" \
-        --function-url-auth-type AWS_IAM &>/dev/null || true
+        dist_domain=$(aws cloudfront get-distribution --id "$dist_id" \
+            --query 'Distribution.DomainName' --output text)
 
-    local dist_domain=$(aws cloudfront get-distribution --id "$dist_id" \
-        --query 'Distribution.DomainName' --output text)
+        print_success "$name CloudFront: https://${dist_domain}"
+    fi
 
-    print_success "$name CloudFront: https://${dist_domain}"
+    # Always ensure Lambda permission exists for CloudFront OAC
+    print_step "Ensuring CloudFront permission for $name Lambda..."
+    local stmt_id="CloudFrontOAC-${dist_id}"
+
+    # Check if permission already exists
+    if aws lambda get-policy --function-name "$func_name" 2>/dev/null | grep -q "$stmt_id"; then
+        print_step "$name Lambda permission already exists"
+    else
+        if aws lambda add-permission --function-name "$func_name" \
+            --statement-id "$stmt_id" \
+            --action lambda:InvokeFunctionUrl \
+            --principal cloudfront.amazonaws.com \
+            --source-arn "arn:aws:cloudfront::${AWS_ACCOUNT_ID}:distribution/${dist_id}" \
+            --function-url-auth-type AWS_IAM 2>/dev/null; then
+            print_success "$name Lambda permission added"
+        else
+            print_warning "$name Lambda permission may already exist or failed to add"
+        fi
+    fi
+
     echo "https://${dist_domain}/"
 }
 
@@ -576,40 +590,54 @@ API_FQDN=$(echo "$API_CF_URL" | sed 's|https://||' | sed 's|/$||')
 
 print_header "Phase 9: Building & Deploying Frontend App"
 
+# Verify the frontend directory exists
+if [[ ! -d "$WORK_DIR/app-airbrx-com" ]]; then
+    die "Frontend directory not found: $WORK_DIR/app-airbrx-com (clone may have failed)"
+fi
+
 cd "$WORK_DIR/app-airbrx-com"
+print_step "Working in: $(pwd)"
 
 # Update conf.json with API CloudFront URL
 print_step "Configuring frontend with API endpoint..."
 if [[ -f "lib/conf.json" ]]; then
     sed -i.bak "s|\"defaultApiUrl\":.*|\"defaultApiUrl\": \"${API_CF_URL}\"|" lib/conf.json
     rm -f lib/conf.json.bak
+    print_success "Updated lib/conf.json"
+else
+    print_warning "lib/conf.json not found - skipping API URL configuration"
 fi
 
 # Sync static files to S3
-print_step "Uploading to S3..."
+print_step "Uploading to S3: ${APP_BUCKET}"
 aws s3 sync . "s3://${APP_BUCKET}/" --delete --exclude ".git/*"
+print_success "Frontend files uploaded to S3"
 
 # Create CloudFront Origin Access Control
-print_step "Configuring CloudFront..."
+print_step "Configuring CloudFront OAC..."
 
 OAC_NAME="${PREFIX}-airbrx-app-oac"
 OAC_ID=$(aws cloudfront list-origin-access-controls --query \
-    "OriginAccessControlList.Items[?Name=='${OAC_NAME}'].Id" --output text)
+    "OriginAccessControlList.Items[?Name=='${OAC_NAME}'].Id" --output text 2>/dev/null || echo "")
 
 if [[ -z "$OAC_ID" || "$OAC_ID" == "None" ]]; then
+    print_step "Creating OAC: $OAC_NAME"
     OAC_ID=$(aws cloudfront create-origin-access-control --origin-access-control-config \
         "Name=${OAC_NAME},SigningProtocol=sigv4,SigningBehavior=always,OriginAccessControlOriginType=s3" \
         --query 'OriginAccessControl.Id' --output text)
-    print_step "Created OAC: $OAC_ID"
+    print_success "Created OAC: $OAC_ID"
+else
+    print_step "OAC exists: $OAC_ID"
 fi
 
-# Check if distribution exists
+# Check if distribution exists (search by Comment for reliability)
+print_step "Checking for existing CloudFront distribution..."
 DIST_ID=$(aws cloudfront list-distributions --query \
-    "DistributionList.Items[?Origins.Items[?DomainName=='${APP_BUCKET}.s3.${AWS_REGION}.amazonaws.com']].Id" \
-    --output text | head -1)
+    "DistributionList.Items[?contains(Comment, 'Airbrx App - ${PREFIX}')].Id" \
+    --output text 2>/dev/null | head -1 || echo "")
 
 if [[ -z "$DIST_ID" || "$DIST_ID" == "None" ]]; then
-    print_step "Creating CloudFront distribution..."
+    print_step "Creating new CloudFront distribution..."
 
     DIST_CONFIG=$(cat <<EOF
 {
@@ -654,6 +682,9 @@ EOF
 
     DIST_ID=$(aws cloudfront create-distribution --distribution-config "$DIST_CONFIG" \
         --query 'Distribution.Id' --output text)
+    print_success "Created distribution: $DIST_ID"
+else
+    print_step "Distribution exists: $DIST_ID"
 fi
 
 CLOUDFRONT_DOMAIN=$(aws cloudfront get-distribution --id "$DIST_ID" \
