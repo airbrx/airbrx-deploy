@@ -91,11 +91,27 @@ echo ""
 
 CONFIG_FILE="${1:-}"
 if [[ -z "$CONFIG_FILE" ]]; then
-    CONFIG_FILE=$(ls generated/*-config.env 2>/dev/null | head -1)
-    if [[ -z "$CONFIG_FILE" ]]; then
-        die "Usage: ./cleanup.sh <config-file> or run prereq.sh first"
+    # Look for configs in generated folder
+    CONFIG_FILES=(generated/*-config.env)
+    if [[ ! -e "${CONFIG_FILES[0]}" ]]; then
+        die "No config files found. Run prereq.sh first."
+    elif [[ ${#CONFIG_FILES[@]} -eq 1 ]]; then
+        CONFIG_FILE="${CONFIG_FILES[0]}"
+        print_step "Using config: $CONFIG_FILE"
+    else
+        echo "Multiple config files found:"
+        echo ""
+        for i in "${!CONFIG_FILES[@]}"; do
+            echo "  $((i+1))) ${CONFIG_FILES[$i]}"
+        done
+        echo ""
+        read -p "Select config [1-${#CONFIG_FILES[@]}]: " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#CONFIG_FILES[@]} ]]; then
+            CONFIG_FILE="${CONFIG_FILES[$((choice-1))]}"
+        else
+            die "Invalid selection"
+        fi
     fi
-    print_step "Auto-detected config: $CONFIG_FILE"
 fi
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
