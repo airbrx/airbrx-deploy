@@ -181,11 +181,33 @@ check_lambda() {
             print_warn "$desc: $func (State: $state)"
         fi
 
-        # Check for function URL
+        # Check for function URL and auth type
         local url_config=$(aws lambda get-function-url-config --function-name "$func" 2>/dev/null)
         if [[ -n "$url_config" ]]; then
             local url=$(echo "$url_config" | jq -r '.FunctionUrl')
+            local auth_type=$(echo "$url_config" | jq -r '.AuthType')
             print_url "$url"
+            if [[ "$auth_type" == "NONE" ]]; then
+                print_ok "  Auth: $auth_type (public)"
+            else
+                print_warn "  Auth: $auth_type (restricted)"
+            fi
+        fi
+
+        # Check resource-based policy
+        local policy=$(aws lambda get-policy --function-name "$func" 2>/dev/null)
+        if [[ -n "$policy" ]]; then
+            local statements=$(echo "$policy" | jq -r '.Policy | fromjson | .Statement')
+            local public_access=$(echo "$statements" | jq -r '.[] | select(.Sid == "FunctionURLAllowPublicAccess")')
+            if [[ -n "$public_access" ]]; then
+                local principal=$(echo "$public_access" | jq -r '.Principal')
+                local condition=$(echo "$public_access" | jq -r '.Condition.StringEquals["lambda:FunctionUrlAuthType"] // "none"')
+                print_ok "  Policy: FunctionURLAllowPublicAccess (Principal: $principal, AuthType: $condition)"
+            else
+                print_warn "  Policy: No public access statement found"
+            fi
+        else
+            print_warn "  Policy: No resource policy attached"
         fi
     else
         print_fail "$desc: $func (not found)"
@@ -223,6 +245,16 @@ check_cloudfront() {
             print_warn "$name: $dist_id (Status: $status, Enabled: $enabled)"
         fi
         print_url "https://${domain}"
+
+        # Show origin and OAC info
+        local origin_domain=$(echo "$info" | jq -r '.Distribution.DistributionConfig.Origins.Items[0].DomainName')
+        local oac_id=$(echo "$info" | jq -r '.Distribution.DistributionConfig.Origins.Items[0].OriginAccessControlId // "none"')
+        print_info "  Origin: $origin_domain"
+        if [[ -n "$oac_id" && "$oac_id" != "none" && "$oac_id" != "" && "$oac_id" != "null" ]]; then
+            print_warn "  OAC: $oac_id (requests will be signed)"
+        else
+            print_ok "  OAC: none (pass-through)"
+        fi
 
         # Export for later use
         eval "${var_name}='https://${domain}'"
