@@ -378,12 +378,18 @@ deploy_lambda() {
     # Wait for function to be active
     aws lambda wait function-active --function-name "$func_name"
 
-    # Create function URL if requested (AWS_IAM auth - CloudFront only)
+    # Create function URL if requested (NONE auth - Lambda handles auth via JWT)
     if [[ "$create_url" == "true" ]]; then
-        # Create or update URL with AWS_IAM auth
+        # Create or update URL with NONE auth (matches production pattern)
         if ! aws lambda get-function-url-config --function-name "$func_name" &>/dev/null; then
             aws lambda create-function-url-config --function-name "$func_name" \
-                --auth-type AWS_IAM > /dev/null
+                --auth-type NONE > /dev/null
+            # Allow public access to function URL
+            aws lambda add-permission --function-name "$func_name" \
+                --statement-id "FunctionURLAllowPublicAccess" \
+                --action lambda:InvokeFunctionUrl \
+                --principal "*" \
+                --function-url-auth-type NONE >/dev/null 2>&1 || true
         fi
 
         local url=$(aws lambda get-function-url-config --function-name "$func_name" \
@@ -476,7 +482,7 @@ deploy_lambda "$LOGSUMMARY_FUNC" "$LOGSUMMARY_ROLE_ARN" "lambda-handler.handler"
 
 print_header "Phase 8b: Creating CloudFront for API Endpoints"
 
-# Helper to create CloudFront distribution for Lambda Function URL with OAC
+# Helper to create CloudFront distribution for Lambda Function URL (no OAC - matches production pattern)
 # Note: All print output goes to stderr so stdout can return the URL
 create_lambda_cloudfront() {
     local name="$1"
@@ -496,20 +502,9 @@ create_lambda_cloudfront() {
         dist_id="$existing_dist"
         dist_domain=$(aws cloudfront get-distribution --id "$dist_id" --query 'Distribution.DomainName' --output text)
     else
-        # Create OAC for Lambda
-        local oac_name="${PREFIX}-${name}-oac"
-        local oac_id=$(aws cloudfront list-origin-access-controls --query \
-            "OriginAccessControlList.Items[?Name=='${oac_name}'].Id" --output text 2>/dev/null)
-
-        if [[ -z "$oac_id" || "$oac_id" == "None" ]]; then
-            echo -e "${GREEN}▶${NC} Creating OAC for $name..." >&2
-            oac_id=$(aws cloudfront create-origin-access-control --origin-access-control-config \
-                "Name=${oac_name},SigningProtocol=sigv4,SigningBehavior=always,OriginAccessControlOriginType=lambda" \
-                --query 'OriginAccessControl.Id' --output text)
-        fi
-
         echo -e "${GREEN}▶${NC} Creating CloudFront distribution for $name..." >&2
 
+        # Simple CloudFront -> Lambda URL (no OAC, Lambda handles auth via JWT)
         local dist_config=$(cat <<EOFCF
 {
     "CallerReference": "${PREFIX}-${name}-$(date +%s)",
@@ -519,7 +514,6 @@ create_lambda_cloudfront() {
         "Items": [{
             "Id": "lambda-${name}",
             "DomainName": "${origin_domain}",
-            "OriginAccessControlId": "${oac_id}",
             "CustomOriginConfig": {
                 "HTTPPort": 80,
                 "HTTPSPort": 443,
@@ -553,26 +547,6 @@ EOFCF
             --query 'Distribution.DomainName' --output text)
 
         echo -e "${GREEN}✓${NC} $name CloudFront: https://${dist_domain}" >&2
-    fi
-
-    # Always ensure Lambda permission exists for CloudFront OAC
-    echo -e "${GREEN}▶${NC} Ensuring CloudFront permission for $name Lambda..." >&2
-    local stmt_id="CloudFrontOAC-${dist_id}"
-
-    # Check if permission already exists
-    if aws lambda get-policy --function-name "$func_name" 2>/dev/null | grep -q "$stmt_id"; then
-        echo -e "${GREEN}▶${NC} $name Lambda permission already exists" >&2
-    else
-        if aws lambda add-permission --function-name "$func_name" \
-            --statement-id "$stmt_id" \
-            --action lambda:InvokeFunctionUrl \
-            --principal cloudfront.amazonaws.com \
-            --source-arn "arn:aws:cloudfront::${AWS_ACCOUNT_ID}:distribution/${dist_id}" \
-            --function-url-auth-type AWS_IAM >/dev/null 2>&1; then
-            echo -e "${GREEN}✓${NC} $name Lambda permission added" >&2
-        else
-            echo -e "${YELLOW}⚠${NC} $name Lambda permission may already exist or failed to add" >&2
-        fi
     fi
 
     echo "https://${dist_domain}/"

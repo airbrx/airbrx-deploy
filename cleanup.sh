@@ -205,10 +205,8 @@ delete_cloudfront "Frontend" "Airbrx App - ${PREFIX}"
 delete_cloudfront "API" "Airbrx api - ${PREFIX}"
 delete_cloudfront "Gateway" "Airbrx gateway - ${PREFIX}"
 
-# Delete all OACs
+# Delete OAC (only used for S3 frontend)
 delete_oac "${PREFIX}-airbrx-app-oac"
-delete_oac "${PREFIX}-api-oac"
-delete_oac "${PREFIX}-gateway-oac"
 
 #------------------------------------------------------------------------------
 # Delete Lambda Functions
@@ -313,6 +311,24 @@ delete_role() {
 delete_role "${PREFIX}-airbrx-api-role"
 delete_role "${PREFIX}-airbrx-gateway-role"
 delete_role "${PREFIX}-airbrx-log-summary-role"
+
+#------------------------------------------------------------------------------
+# Delete Temporary Build Files
+#------------------------------------------------------------------------------
+
+print_header "Deleting Temporary Files"
+
+# Remove any leftover /tmp/airbrx-deploy-* directories from failed/interrupted deploys
+TEMP_DIRS=$(ls -d /tmp/airbrx-deploy-* 2>/dev/null || true)
+if [[ -n "$TEMP_DIRS" ]]; then
+    for dir in $TEMP_DIRS; do
+        print_step "Removing: $dir"
+        rm -rf "$dir"
+    done
+    print_success "Removed temporary build directories"
+else
+    print_step "No temporary build directories found"
+fi
 
 #------------------------------------------------------------------------------
 # Delete Generated Files
