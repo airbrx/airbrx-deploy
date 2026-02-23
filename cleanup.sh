@@ -315,6 +315,31 @@ delete_role "${PREFIX}-airbrx-gateway-role"
 delete_role "${PREFIX}-airbrx-log-summary-role"
 
 #------------------------------------------------------------------------------
+# Delete Generated Files
+#------------------------------------------------------------------------------
+
+print_header "Deleting Generated Files"
+
+CONFIG_DIR=$(dirname "$CONFIG_FILE")
+if [[ -d "$CONFIG_DIR" ]]; then
+    print_step "Removing generated files for: ${PREFIX}"
+    rm -f "${CONFIG_DIR}/${PREFIX}-config.env"
+    rm -f "${CONFIG_DIR}/${PREFIX}-god-pat.json"
+    rm -f "${CONFIG_DIR}/${PREFIX}-lambda-trust-policy.json"
+    rm -f "${CONFIG_DIR}/${PREFIX}-airbrx-api-policy.json"
+    rm -f "${CONFIG_DIR}/${PREFIX}-airbrx-gateway-policy.json"
+    rm -f "${CONFIG_DIR}/${PREFIX}-airbrx-log-summary-policy.json"
+    rm -f "${CONFIG_DIR}/${PREFIX}-deployer-policy.json"
+    print_success "Removed generated files"
+
+    # Remove generated directory if empty
+    if [[ -d "$CONFIG_DIR" ]] && [[ -z "$(ls -A "$CONFIG_DIR" 2>/dev/null)" ]]; then
+        rmdir "$CONFIG_DIR"
+        print_step "Removed empty generated/ directory"
+    fi
+fi
+
+#------------------------------------------------------------------------------
 # Cleanup Complete
 #------------------------------------------------------------------------------
 
@@ -323,10 +348,11 @@ print_header "Cleanup Complete"
 echo "
 All Airbrx resources for '${PREFIX}' have been deleted:
 
-  ✓ CloudFront distribution
+  ✓ CloudFront distributions (frontend, api, gateway)
   ✓ S3 buckets (admin-storage, gateway-storage, app)
   ✓ Lambda functions (api, gateway, log-summary)
   ✓ IAM roles and policies
+  ✓ Generated config files
 
 Note: CloudWatch log groups may still exist and can be deleted manually:
   aws logs delete-log-group --log-group-name /aws/lambda/${PREFIX}-airbrx-api
