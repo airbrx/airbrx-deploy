@@ -125,66 +125,74 @@ print_warning "Starting cleanup..."
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null) || die "AWS CLI not configured"
 
 #------------------------------------------------------------------------------
-# Delete CloudFront Distribution
+# Delete CloudFront Distributions
 #------------------------------------------------------------------------------
 
-print_header "Deleting CloudFront Distribution"
+print_header "Deleting CloudFront Distributions"
 
-APP_BUCKET="${PREFIX}-airbrx-app"
+delete_cloudfront() {
+    local name="$1"
+    local search_pattern="$2"
 
-# Find distribution by S3 origin
-DIST_ID=$(aws cloudfront list-distributions --query \
-    "DistributionList.Items[?Origins.Items[?contains(DomainName, '${APP_BUCKET}')]].Id" \
-    --output text 2>/dev/null | head -1)
+    # Find distribution
+    local dist_id=$(aws cloudfront list-distributions --query \
+        "DistributionList.Items[?contains(Comment, '${search_pattern}')].Id" \
+        --output text 2>/dev/null | head -1)
 
-if [[ -n "$DIST_ID" && "$DIST_ID" != "None" ]]; then
-    print_step "Found distribution: $DIST_ID"
-
-    # Check if enabled
-    DIST_STATUS=$(aws cloudfront get-distribution --id "$DIST_ID" --query 'Distribution.DistributionConfig.Enabled' --output text)
-
-    if [[ "$DIST_STATUS" == "true" ]]; then
-        print_step "Disabling distribution..."
-
-        # Get current config
-        ETAG=$(aws cloudfront get-distribution-config --id "$DIST_ID" --query 'ETag' --output text)
-        aws cloudfront get-distribution-config --id "$DIST_ID" --query 'DistributionConfig' > /tmp/dist-config.json
-
-        # Disable it
-        jq '.Enabled = false' /tmp/dist-config.json > /tmp/dist-config-disabled.json
-        aws cloudfront update-distribution --id "$DIST_ID" --if-match "$ETAG" \
-            --distribution-config file:///tmp/dist-config-disabled.json > /dev/null
-
-        print_step "Waiting for distribution to be disabled (this may take several minutes)..."
-        aws cloudfront wait distribution-deployed --id "$DIST_ID" 2>/dev/null || true
+    if [[ -z "$dist_id" || "$dist_id" == "None" ]]; then
+        print_step "$name: No distribution found"
+        return
     fi
 
-    # Get fresh ETag and delete
-    ETAG=$(aws cloudfront get-distribution --id "$DIST_ID" --query 'ETag' --output text)
+    print_step "$name: Found distribution $dist_id"
 
-    print_step "Deleting distribution..."
-    if aws cloudfront delete-distribution --id "$DIST_ID" --if-match "$ETAG" 2>/dev/null; then
-        print_success "Deleted CloudFront distribution"
+    # Check if enabled
+    local enabled=$(aws cloudfront get-distribution --id "$dist_id" \
+        --query 'Distribution.DistributionConfig.Enabled' --output text)
+
+    if [[ "$enabled" == "true" ]]; then
+        print_step "$name: Disabling..."
+        local etag=$(aws cloudfront get-distribution-config --id "$dist_id" --query 'ETag' --output text)
+        aws cloudfront get-distribution-config --id "$dist_id" --query 'DistributionConfig' > /tmp/dist-config.json
+        jq '.Enabled = false' /tmp/dist-config.json > /tmp/dist-config-disabled.json
+        aws cloudfront update-distribution --id "$dist_id" --if-match "$etag" \
+            --distribution-config file:///tmp/dist-config-disabled.json > /dev/null
+        print_step "$name: Waiting to disable (may take several minutes)..."
+        aws cloudfront wait distribution-deployed --id "$dist_id" 2>/dev/null || true
+    fi
+
+    # Delete
+    local etag=$(aws cloudfront get-distribution --id "$dist_id" --query 'ETag' --output text)
+    if aws cloudfront delete-distribution --id "$dist_id" --if-match "$etag" 2>/dev/null; then
+        print_success "$name: Deleted"
     else
-        print_warning "Could not delete distribution (may still be disabling)"
+        print_warning "$name: Could not delete (may still be disabling)"
     fi
 
     rm -f /tmp/dist-config.json /tmp/dist-config-disabled.json
-else
-    print_step "No CloudFront distribution found"
-fi
+}
 
-# Delete Origin Access Control
-OAC_NAME="${PREFIX}-airbrx-app-oac"
-OAC_ID=$(aws cloudfront list-origin-access-controls --query \
-    "OriginAccessControlList.Items[?Name=='${OAC_NAME}'].Id" --output text 2>/dev/null)
+delete_oac() {
+    local oac_name="$1"
+    local oac_id=$(aws cloudfront list-origin-access-controls --query \
+        "OriginAccessControlList.Items[?Name=='${oac_name}'].Id" --output text 2>/dev/null)
 
-if [[ -n "$OAC_ID" && "$OAC_ID" != "None" ]]; then
-    print_step "Deleting Origin Access Control..."
-    ETAG=$(aws cloudfront get-origin-access-control --id "$OAC_ID" --query 'ETag' --output text)
-    aws cloudfront delete-origin-access-control --id "$OAC_ID" --if-match "$ETAG" 2>/dev/null || true
-    print_success "Deleted OAC"
-fi
+    if [[ -n "$oac_id" && "$oac_id" != "None" ]]; then
+        local etag=$(aws cloudfront get-origin-access-control --id "$oac_id" --query 'ETag' --output text)
+        aws cloudfront delete-origin-access-control --id "$oac_id" --if-match "$etag" 2>/dev/null || true
+        print_success "Deleted OAC: $oac_name"
+    fi
+}
+
+# Delete all CloudFront distributions
+delete_cloudfront "Frontend" "${PREFIX}"
+delete_cloudfront "API" "${PREFIX}-api"
+delete_cloudfront "Gateway" "${PREFIX}-gateway"
+
+# Delete all OACs
+delete_oac "${PREFIX}-airbrx-app-oac"
+delete_oac "${PREFIX}-api-oac"
+delete_oac "${PREFIX}-gateway-oac"
 
 #------------------------------------------------------------------------------
 # Delete Lambda Functions

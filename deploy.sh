@@ -363,20 +363,13 @@ deploy_lambda() {
     # Wait for function to be active
     aws lambda wait function-active --function-name "$func_name"
 
-    # Create function URL if requested
+    # Create function URL if requested (AWS_IAM auth - CloudFront only)
     if [[ "$create_url" == "true" ]]; then
-        # Create URL if it doesn't exist
+        # Create or update URL with AWS_IAM auth
         if ! aws lambda get-function-url-config --function-name "$func_name" &>/dev/null; then
             aws lambda create-function-url-config --function-name "$func_name" \
-                --auth-type NONE > /dev/null
+                --auth-type AWS_IAM > /dev/null
         fi
-
-        # Always ensure public access permission exists
-        aws lambda add-permission --function-name "$func_name" \
-            --statement-id FunctionURLAllowPublicAccess \
-            --action lambda:InvokeFunctionUrl \
-            --principal "*" \
-            --function-url-auth-type NONE &>/dev/null || true
 
         local url=$(aws lambda get-function-url-config --function-name "$func_name" \
             --query 'FunctionUrl' --output text)
@@ -462,9 +455,105 @@ LOGSUMMARY_ENV=$(build_env_json \
 deploy_lambda "$LOGSUMMARY_FUNC" "$LOGSUMMARY_ROLE_ARN" "lambda-handler.handler" \
     "$WORK_DIR/log-summary.zip" 1536 900 "$LOGSUMMARY_ENV" "false"
 
-# Update API with derived URLs (DESCOPE_REDIRECT_URI, DASHBOARD_URL, ALLOWED_REDIRECT_DOMAINS)
+#------------------------------------------------------------------------------
+# Phase 8b: Create CloudFront Distributions for APIs
+#------------------------------------------------------------------------------
+
+print_header "Phase 8b: Creating CloudFront for API Endpoints"
+
+# Helper to create CloudFront distribution for Lambda Function URL with OAC
+create_lambda_cloudfront() {
+    local name="$1"
+    local lambda_url="$2"
+    local func_name="$3"
+    local origin_domain=$(echo "$lambda_url" | sed 's|https://||' | sed 's|/$||')
+
+    # Check if distribution already exists
+    local existing_dist=$(aws cloudfront list-distributions --query \
+        "DistributionList.Items[?Origins.Items[?DomainName=='${origin_domain}']].Id" \
+        --output text 2>/dev/null | head -1)
+
+    if [[ -n "$existing_dist" && "$existing_dist" != "None" ]]; then
+        print_step "$name: Distribution exists ($existing_dist)"
+        echo "https://$(aws cloudfront get-distribution --id "$existing_dist" --query 'Distribution.DomainName' --output text)/"
+        return
+    fi
+
+    # Create OAC for Lambda
+    local oac_name="${PREFIX}-${name}-oac"
+    local oac_id=$(aws cloudfront list-origin-access-controls --query \
+        "OriginAccessControlList.Items[?Name=='${oac_name}'].Id" --output text 2>/dev/null)
+
+    if [[ -z "$oac_id" || "$oac_id" == "None" ]]; then
+        print_step "Creating OAC for $name..."
+        oac_id=$(aws cloudfront create-origin-access-control --origin-access-control-config \
+            "Name=${oac_name},SigningProtocol=sigv4,SigningBehavior=always,OriginAccessControlOriginType=lambda" \
+            --query 'OriginAccessControl.Id' --output text)
+    fi
+
+    print_step "Creating CloudFront distribution for $name..."
+
+    local dist_config=$(cat <<EOFCF
+{
+    "CallerReference": "${PREFIX}-${name}-$(date +%s)",
+    "Comment": "Airbrx ${name} - ${PREFIX}",
+    "Origins": {
+        "Quantity": 1,
+        "Items": [{
+            "Id": "lambda-${name}",
+            "DomainName": "${origin_domain}",
+            "OriginAccessControlId": "${oac_id}",
+            "CustomOriginConfig": {
+                "HTTPPort": 80,
+                "HTTPSPort": 443,
+                "OriginProtocolPolicy": "https-only",
+                "OriginSslProtocols": { "Quantity": 1, "Items": ["TLSv1.2"] }
+            }
+        }]
+    },
+    "DefaultCacheBehavior": {
+        "TargetOriginId": "lambda-${name}",
+        "ViewerProtocolPolicy": "redirect-to-https",
+        "AllowedMethods": {
+            "Quantity": 7,
+            "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
+            "CachedMethods": { "Quantity": 2, "Items": ["GET", "HEAD"] }
+        },
+        "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+        "OriginRequestPolicyId": "b689b0a8-53d0-40ab-baf2-68738e2966ac",
+        "Compress": true
+    },
+    "Enabled": true,
+    "PriceClass": "PriceClass_100"
+}
+EOFCF
+)
+
+    local dist_id=$(aws cloudfront create-distribution --distribution-config "$dist_config" \
+        --query 'Distribution.Id' --output text)
+
+    # Add Lambda permission for CloudFront OAC
+    print_step "Adding CloudFront permission to $name Lambda..."
+    aws lambda add-permission --function-name "$func_name" \
+        --statement-id "CloudFrontOAC-${dist_id}" \
+        --action lambda:InvokeFunctionUrl \
+        --principal cloudfront.amazonaws.com \
+        --source-arn "arn:aws:cloudfront::${AWS_ACCOUNT_ID}:distribution/${dist_id}" \
+        --function-url-auth-type AWS_IAM &>/dev/null || true
+
+    local dist_domain=$(aws cloudfront get-distribution --id "$dist_id" \
+        --query 'Distribution.DomainName' --output text)
+
+    print_success "$name CloudFront: https://${dist_domain}"
+    echo "https://${dist_domain}/"
+}
+
+API_CF_URL=$(create_lambda_cloudfront "api" "$API_URL" "$API_FUNC")
+GATEWAY_CF_URL=$(create_lambda_cloudfront "gateway" "$GATEWAY_URL" "$GATEWAY_FUNC")
+
+# Update API with derived URLs
 print_step "Updating API with derived URLs..."
-API_FQDN=$(echo "$API_URL" | sed 's|https://||' | sed 's|/$||')
+API_FQDN=$(echo "$API_CF_URL" | sed 's|https://||' | sed 's|/$||')
 
 #------------------------------------------------------------------------------
 # Phase 9: Build & Deploy Frontend App
@@ -474,10 +563,10 @@ print_header "Phase 9: Building & Deploying Frontend App"
 
 cd "$WORK_DIR/app-airbrx-com"
 
-# Update conf.json with API URL
+# Update conf.json with API CloudFront URL
 print_step "Configuring frontend with API endpoint..."
 if [[ -f "lib/conf.json" ]]; then
-    sed -i.bak "s|\"defaultApiUrl\":.*|\"defaultApiUrl\": \"${API_URL}\"|" lib/conf.json
+    sed -i.bak "s|\"defaultApiUrl\":.*|\"defaultApiUrl\": \"${API_CF_URL}\"|" lib/conf.json
     rm -f lib/conf.json.bak
 fi
 
@@ -706,28 +795,28 @@ echo ""
 echo "Testing endpoints..."
 echo ""
 
-# Test API
-API_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}health" 2>/dev/null || echo "000")
+# Test API via CloudFront
+API_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "${API_CF_URL}health" 2>/dev/null || echo "000")
 if [[ "$API_HEALTH" == "200" ]]; then
     print_success "API Health: OK"
 else
-    print_warning "API Health: $API_HEALTH (may need a moment to warm up)"
+    print_warning "API Health: $API_HEALTH (CloudFront may take a few minutes to deploy)"
 fi
 
-# Test Gateway
-GW_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "${GATEWAY_URL}" 2>/dev/null || echo "000")
+# Test Gateway via CloudFront
+GW_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "${GATEWAY_CF_URL}" 2>/dev/null || echo "000")
 if [[ "$GW_HEALTH" != "000" ]]; then
     print_success "Gateway: Responding ($GW_HEALTH)"
 else
-    print_warning "Gateway: Not responding yet (may need a moment)"
+    print_warning "Gateway: Not responding yet (CloudFront may take a few minutes)"
 fi
 
-# CloudFront status
+# Frontend CloudFront status
 CF_STATUS=$(aws cloudfront get-distribution --id "$DIST_ID" --query 'Distribution.Status' --output text)
 if [[ "$CF_STATUS" == "Deployed" ]]; then
-    print_success "CloudFront: Deployed"
+    print_success "Frontend CloudFront: Deployed"
 else
-    print_warning "CloudFront: $CF_STATUS (may take 5-10 minutes)"
+    print_warning "Frontend CloudFront: $CF_STATUS (may take 5-10 minutes)"
 fi
 
 echo ""
@@ -738,8 +827,8 @@ echo "
 │                        DEPLOYMENT URLS                         │
 ├─────────────────────────────────────────────────────────────────┤
 │  Frontend App:  https://${CLOUDFRONT_DOMAIN}
-│  API Endpoint:  ${API_URL}
-│  Gateway:       ${GATEWAY_URL}
+│  API Endpoint:  ${API_CF_URL}
+│  Gateway:       ${GATEWAY_CF_URL}
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐

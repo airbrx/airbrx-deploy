@@ -181,44 +181,54 @@ check_lambda "${PREFIX}-airbrx-gateway" "Gateway"
 check_lambda "${PREFIX}-airbrx-log-summary" "Log Summary"
 
 #------------------------------------------------------------------------------
-# CloudFront Distribution
+# CloudFront Distributions
 #------------------------------------------------------------------------------
 
-print_section "CloudFront Distribution"
+print_section "CloudFront Distributions"
 
-APP_BUCKET="${PREFIX}-airbrx-app"
-DIST_ID=$(aws cloudfront list-distributions --query \
-    "DistributionList.Items[?Origins.Items[?contains(DomainName, '${APP_BUCKET}')]].Id" \
-    --output text 2>/dev/null | head -1)
+check_cloudfront() {
+    local name="$1"
+    local search="$2"
+    local var_name="$3"
 
-if [[ -n "$DIST_ID" && "$DIST_ID" != "None" ]]; then
-    DIST_INFO=$(aws cloudfront get-distribution --id "$DIST_ID" 2>/dev/null)
-    DIST_STATUS=$(echo "$DIST_INFO" | jq -r '.Distribution.Status')
-    DIST_DOMAIN=$(echo "$DIST_INFO" | jq -r '.Distribution.DomainName')
-    DIST_ENABLED=$(echo "$DIST_INFO" | jq -r '.Distribution.DistributionConfig.Enabled')
+    local dist_id=$(aws cloudfront list-distributions --query \
+        "DistributionList.Items[?contains(Comment, '${search}')].Id" \
+        --output text 2>/dev/null | head -1)
 
-    if [[ "$DIST_STATUS" == "Deployed" && "$DIST_ENABLED" == "true" ]]; then
-        print_ok "Distribution: $DIST_ID"
+    if [[ -n "$dist_id" && "$dist_id" != "None" ]]; then
+        local info=$(aws cloudfront get-distribution --id "$dist_id" 2>/dev/null)
+        local status=$(echo "$info" | jq -r '.Distribution.Status')
+        local domain=$(echo "$info" | jq -r '.Distribution.DomainName')
+        local enabled=$(echo "$info" | jq -r '.Distribution.DistributionConfig.Enabled')
+
+        if [[ "$status" == "Deployed" && "$enabled" == "true" ]]; then
+            print_ok "$name: $dist_id"
+        else
+            print_warn "$name: $dist_id (Status: $status, Enabled: $enabled)"
+        fi
+        print_url "https://${domain}"
+
+        # Export for later use
+        eval "${var_name}='https://${domain}'"
+        eval "${var_name}_DOMAIN='${domain}'"
     else
-        print_warn "Distribution: $DIST_ID (Status: $DIST_STATUS, Enabled: $DIST_ENABLED)"
+        print_fail "$name: Not found"
+        eval "${var_name}=''"
     fi
-    print_url "https://${DIST_DOMAIN}"
-else
-    print_fail "No CloudFront distribution found"
-fi
+}
+
+check_cloudfront "Frontend" "Airbrx App - ${PREFIX}" "FRONTEND_CF"
+check_cloudfront "API" "Airbrx api - ${PREFIX}" "API_CF"
+check_cloudfront "Gateway" "Airbrx gateway - ${PREFIX}" "GATEWAY_CF"
 
 #------------------------------------------------------------------------------
-# Health Checks
+# Health Checks (via CloudFront)
 #------------------------------------------------------------------------------
 
 print_section "Endpoint Health"
 
-# Get URLs
-API_URL=$(aws lambda get-function-url-config --function-name "${PREFIX}-airbrx-api" 2>/dev/null | jq -r '.FunctionUrl' 2>/dev/null)
-GATEWAY_URL=$(aws lambda get-function-url-config --function-name "${PREFIX}-airbrx-gateway" 2>/dev/null | jq -r '.FunctionUrl' 2>/dev/null)
-
-if [[ -n "$API_URL" && "$API_URL" != "null" ]]; then
-    API_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${API_URL}health" 2>/dev/null || echo "000")
+if [[ -n "$API_CF" ]]; then
+    API_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${API_CF}/health" 2>/dev/null || echo "000")
     if [[ "$API_HEALTH" == "200" ]]; then
         print_ok "API Health: OK (200)"
     elif [[ "$API_HEALTH" == "000" ]]; then
@@ -227,22 +237,22 @@ if [[ -n "$API_URL" && "$API_URL" != "null" ]]; then
         print_warn "API Health: HTTP $API_HEALTH"
     fi
 else
-    print_fail "API: No function URL configured"
+    print_fail "API: No CloudFront distribution"
 fi
 
-if [[ -n "$GATEWAY_URL" && "$GATEWAY_URL" != "null" ]]; then
-    GW_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${GATEWAY_URL}" 2>/dev/null || echo "000")
+if [[ -n "$GATEWAY_CF" ]]; then
+    GW_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${GATEWAY_CF}/" 2>/dev/null || echo "000")
     if [[ "$GW_HEALTH" != "000" ]]; then
         print_ok "Gateway: Responding (HTTP $GW_HEALTH)"
     else
         print_fail "Gateway: Connection failed"
     fi
 else
-    print_fail "Gateway: No function URL configured"
+    print_fail "Gateway: No CloudFront distribution"
 fi
 
-if [[ -n "$DIST_DOMAIN" ]]; then
-    CF_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://${DIST_DOMAIN}/" 2>/dev/null || echo "000")
+if [[ -n "$FRONTEND_CF" ]]; then
+    CF_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${FRONTEND_CF}/" 2>/dev/null || echo "000")
     if [[ "$CF_HEALTH" == "200" ]]; then
         print_ok "Frontend: OK (200)"
     elif [[ "$CF_HEALTH" == "000" ]]; then
@@ -259,24 +269,24 @@ fi
 print_header "Deployment URLs"
 
 echo -e "  ${CYAN}Frontend App:${NC}"
-if [[ -n "$DIST_DOMAIN" ]]; then
-    echo -e "    https://${DIST_DOMAIN}"
+if [[ -n "$FRONTEND_CF" ]]; then
+    echo -e "    ${FRONTEND_CF}"
 else
     echo -e "    ${RED}Not deployed${NC}"
 fi
 
 echo ""
 echo -e "  ${CYAN}API Endpoint:${NC}"
-if [[ -n "$API_URL" && "$API_URL" != "null" ]]; then
-    echo -e "    ${API_URL}"
+if [[ -n "$API_CF" ]]; then
+    echo -e "    ${API_CF}"
 else
     echo -e "    ${RED}Not deployed${NC}"
 fi
 
 echo ""
 echo -e "  ${CYAN}Gateway Endpoint:${NC}"
-if [[ -n "$GATEWAY_URL" && "$GATEWAY_URL" != "null" ]]; then
-    echo -e "    ${GATEWAY_URL}"
+if [[ -n "$GATEWAY_CF" ]]; then
+    echo -e "    ${GATEWAY_CF}"
 else
     echo -e "    ${RED}Not deployed${NC}"
 fi
