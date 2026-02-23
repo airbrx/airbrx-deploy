@@ -301,9 +301,11 @@ build_lambda() {
     local zip_file="$3"
 
     print_step "Building: $name"
-    cd "$src_dir"
-    npm install --omit=dev
-    zip -rq "$zip_file" . -x "*.git*"
+    (
+        cd "$src_dir"
+        npm install --omit=dev
+        zip -rq "$zip_file" . -x "*.git*"
+    )
     print_success "Built: $zip_file ($(du -h "$zip_file" | cut -f1))"
 }
 
