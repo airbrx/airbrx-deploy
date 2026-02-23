@@ -245,27 +245,23 @@ print_header "Deleting S3 Buckets"
 delete_bucket() {
     local bucket_name="$1"
 
-    if aws s3api head-bucket --bucket "$bucket_name" 2>/dev/null; then
+    if aws s3api head-bucket --bucket "$bucket_name" &>/dev/null; then
         print_step "Deleting bucket: $bucket_name"
 
-        # Empty bucket (handles current objects)
-        aws s3 rm "s3://${bucket_name}" --recursive 2>/dev/null || true
-
-        # Delete all object versions and delete markers (required for versioned buckets)
-        local versions=$(aws s3api list-object-versions --bucket "$bucket_name" \
-            --query '[Versions[].{Key:Key,VersionId:VersionId}, DeleteMarkers[].{Key:Key,VersionId:VersionId}][]' \
-            --output json 2>/dev/null)
-
-        if [[ -n "$versions" && "$versions" != "[]" ]]; then
-            echo "$versions" | jq -c '.[]' 2>/dev/null | while read -r obj; do
-                local key=$(echo "$obj" | jq -r '.Key')
-                local vid=$(echo "$obj" | jq -r '.VersionId')
-                [[ -n "$key" && "$key" != "null" ]] && \
-                    aws s3api delete-object --bucket "$bucket_name" --key "$key" --version-id "$vid" 2>/dev/null || true
-            done
+        # Force delete bucket and all contents
+        if aws s3 rb "s3://${bucket_name}" --force 2>/dev/null; then
+            print_success "Deleted: $bucket_name"
+            return
         fi
 
-        # Delete the bucket
+        # If force delete failed, bucket likely has versioned objects - delete them
+        print_step "Removing versioned objects..."
+        aws s3api delete-objects --bucket "$bucket_name" --delete \
+            "$(aws s3api list-object-versions --bucket "$bucket_name" \
+                --query '{Objects: [Versions,DeleteMarkers][].{Key:Key,VersionId:VersionId}}')" \
+            --quiet 2>/dev/null || true
+
+        # Now delete the bucket
         aws s3 rb "s3://${bucket_name}" 2>/dev/null || true
         print_success "Deleted: $bucket_name"
     else

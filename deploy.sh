@@ -384,12 +384,19 @@ deploy_lambda() {
         if ! aws lambda get-function-url-config --function-name "$func_name" &>/dev/null; then
             aws lambda create-function-url-config --function-name "$func_name" \
                 --auth-type NONE > /dev/null
-            # Allow public access to function URL
-            aws lambda add-permission --function-name "$func_name" \
-                --statement-id "FunctionURLAllowPublicAccess" \
-                --action lambda:InvokeFunctionUrl \
-                --principal "*" \
-                --function-url-auth-type NONE >/dev/null 2>&1 || true
+        fi
+
+        # Always ensure public access permission exists (remove first to avoid conflicts)
+        aws lambda remove-permission --function-name "$func_name" \
+            --statement-id "FunctionURLAllowPublicAccess" 2>/dev/null || true
+
+        if ! aws lambda add-permission --function-name "$func_name" \
+            --statement-id "FunctionURLAllowPublicAccess" \
+            --action lambda:InvokeFunctionUrl \
+            --principal "*" \
+            --function-url-auth-type NONE >/dev/null 2>&1; then
+            echo -e "${RED}✗${NC} Failed to add public access permission for $func_name" >&2
+            exit 1
         fi
 
         local url=$(aws lambda get-function-url-config --function-name "$func_name" \
