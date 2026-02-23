@@ -302,7 +302,7 @@ build_lambda() {
 
     print_step "Building: $name"
     cd "$src_dir"
-    npm ci --omit=dev
+    npm install --omit=dev
     zip -rq "$zip_file" . -x "*.git*"
     print_success "Built: $zip_file ($(du -h "$zip_file" | cut -f1))"
 }
@@ -480,7 +480,7 @@ fi
 
 # Build frontend
 print_step "Installing dependencies..."
-npm ci
+npm install
 
 print_step "Building frontend..."
 npm run build
