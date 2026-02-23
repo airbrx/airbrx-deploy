@@ -568,7 +568,7 @@ EOFCF
             --action lambda:InvokeFunctionUrl \
             --principal cloudfront.amazonaws.com \
             --source-arn "arn:aws:cloudfront::${AWS_ACCOUNT_ID}:distribution/${dist_id}" \
-            --function-url-auth-type AWS_IAM 2>/dev/null; then
+            --function-url-auth-type AWS_IAM >/dev/null 2>&1; then
             echo -e "${GREEN}✓${NC} $name Lambda permission added" >&2
         else
             echo -e "${YELLOW}⚠${NC} $name Lambda permission may already exist or failed to add" >&2
@@ -601,8 +601,12 @@ print_step "Working in: $(pwd)"
 
 # Update conf.json with API CloudFront URL
 print_step "Configuring frontend with API endpoint..."
+# Sanitize URL - remove trailing slashes and whitespace
+API_CF_URL_CLEAN=$(echo "$API_CF_URL" | tr -d '[:space:]' | sed 's|/$||')
+print_step "API URL: $API_CF_URL_CLEAN"
 if [[ -f "lib/conf.json" ]]; then
-    sed -i.bak "s|\"defaultApiUrl\":.*|\"defaultApiUrl\": \"${API_CF_URL}\"|" lib/conf.json
+    # Use # as sed delimiter to avoid conflicts with URL characters
+    sed -i.bak "s#\"defaultApiUrl\":.*#\"defaultApiUrl\": \"${API_CF_URL_CLEAN}\"#" lib/conf.json
     rm -f lib/conf.json.bak
     print_success "Updated lib/conf.json"
 else
