@@ -116,13 +116,6 @@ if [[ "$CONFIRM" != "$PREFIX" ]]; then
 fi
 
 echo ""
-read -p "Are you ABSOLUTELY sure? Type 'DELETE' to proceed: " CONFIRM2
-if [[ "$CONFIRM2" != "DELETE" ]]; then
-    echo "Aborted."
-    exit 0
-fi
-
-echo ""
 print_warning "Starting cleanup..."
 
 #------------------------------------------------------------------------------

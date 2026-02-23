@@ -273,67 +273,67 @@ echo "----------"
 echo "Type to search, arrow keys to select, Enter to confirm"
 echo ""
 
-# All AWS regions (parallel arrays for compatibility)
+# All AWS regions sorted by popularity (parallel arrays for compatibility)
 REGION_CODES=(
-    "af-south-1"
-    "ap-east-1"
-    "ap-northeast-1"
-    "ap-northeast-2"
-    "ap-northeast-3"
-    "ap-south-1"
-    "ap-south-2"
-    "ap-southeast-1"
-    "ap-southeast-2"
-    "ap-southeast-3"
-    "ap-southeast-4"
-    "ca-central-1"
-    "eu-central-1"
-    "eu-central-2"
-    "eu-north-1"
-    "eu-south-1"
-    "eu-south-2"
+    "us-east-1"
+    "us-west-2"
     "eu-west-1"
+    "us-east-2"
+    "eu-central-1"
+    "ap-northeast-1"
+    "ap-southeast-1"
     "eu-west-2"
+    "ap-southeast-2"
+    "us-west-1"
+    "ca-central-1"
+    "ap-south-1"
+    "ap-northeast-2"
+    "eu-north-1"
+    "sa-east-1"
     "eu-west-3"
+    "ap-southeast-3"
+    "ap-northeast-3"
+    "me-south-1"
+    "af-south-1"
+    "eu-south-1"
+    "ap-east-1"
+    "ap-south-2"
+    "ap-southeast-4"
+    "eu-central-2"
+    "eu-south-2"
     "il-central-1"
     "me-central-1"
-    "me-south-1"
-    "sa-east-1"
-    "us-east-1"
-    "us-east-2"
-    "us-west-1"
-    "us-west-2"
 )
 
 REGION_NAMES=(
-    "Cape Town"
-    "Hong Kong"
-    "Tokyo"
-    "Seoul"
-    "Osaka"
-    "Mumbai"
-    "Hyderabad"
-    "Singapore"
-    "Sydney"
-    "Jakarta"
-    "Melbourne"
-    "Canada"
-    "Frankfurt"
-    "Zurich"
-    "Stockholm"
-    "Milan"
-    "Spain"
+    "N. Virginia"
+    "Oregon"
     "Ireland"
+    "Ohio"
+    "Frankfurt"
+    "Tokyo"
+    "Singapore"
     "London"
+    "Sydney"
+    "N. California"
+    "Canada"
+    "Mumbai"
+    "Seoul"
+    "Stockholm"
+    "Sao Paulo"
     "Paris"
+    "Jakarta"
+    "Osaka"
+    "Bahrain"
+    "Cape Town"
+    "Milan"
+    "Hong Kong"
+    "Hyderabad"
+    "Melbourne"
+    "Zurich"
+    "Spain"
     "Tel Aviv"
     "UAE"
-    "Bahrain"
-    "Sao Paulo"
-    "N. Virginia"
-    "Ohio"
-    "N. California"
-    "Oregon"
 )
 
 # Get region name by code
@@ -456,21 +456,28 @@ echo ""
 print_success "Selected region: ${AWS_REGION} (${AWS_REGION_NAME})"
 
 echo ""
-echo "AWS Account ID (optional):"
-echo "  - If provided, IAM policies will have complete ARNs"
-echo "  - If skipped, policies will use <ACCOUNT_ID> placeholder"
-echo ""
+echo "AWS Account ID:"
+
+# Try to auto-detect from AWS CLI
+DETECTED_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null) || DETECTED_ACCOUNT_ID=""
+
+if [[ -n "$DETECTED_ACCOUNT_ID" ]]; then
+    print_step "Detected from AWS CLI: $DETECTED_ACCOUNT_ID"
+fi
 
 while true; do
-    read -p "AWS Account ID (12-digit, or press Enter to skip): " AWS_ACCOUNT_ID
-
-    # Empty is fine (skip)
-    if [[ -z "$AWS_ACCOUNT_ID" ]]; then
-        AWS_ACCOUNT_ID="<ACCOUNT_ID>"
-        break
+    if [[ -n "$DETECTED_ACCOUNT_ID" ]]; then
+        read -p "AWS Account ID [$DETECTED_ACCOUNT_ID]: " AWS_ACCOUNT_ID
+        AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-$DETECTED_ACCOUNT_ID}"
+    else
+        read -p "AWS Account ID (12-digit, or press Enter to skip): " AWS_ACCOUNT_ID
+        if [[ -z "$AWS_ACCOUNT_ID" ]]; then
+            AWS_ACCOUNT_ID="<ACCOUNT_ID>"
+            break
+        fi
     fi
 
-    # Validate format if provided
+    # Validate format
     if [[ ! "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
         print_error "AWS Account ID must be exactly 12 digits"
         echo ""
