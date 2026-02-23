@@ -475,26 +475,13 @@ cd "$WORK_DIR/app-airbrx-com"
 # Update conf.json with API URL
 print_step "Configuring frontend with API endpoint..."
 if [[ -f "lib/conf.json" ]]; then
-    # Update defaultApiUrl
     sed -i.bak "s|\"defaultApiUrl\":.*|\"defaultApiUrl\": \"${API_URL}\"|" lib/conf.json
     rm -f lib/conf.json.bak
 fi
 
-# Build frontend
-print_step "Installing dependencies..."
-npm install
-
-print_step "Building frontend..."
-npm run build
-
-# Determine build output directory
-BUILD_DIR="dist"
-[[ -d "build" ]] && BUILD_DIR="build"
-[[ -d "out" ]] && BUILD_DIR="out"
-
-# Sync to S3
+# Sync static files to S3
 print_step "Uploading to S3..."
-aws s3 sync "$BUILD_DIR/" "s3://${APP_BUCKET}/" --delete
+aws s3 sync . "s3://${APP_BUCKET}/" --delete --exclude ".git/*"
 
 # Create CloudFront Origin Access Control
 print_step "Configuring CloudFront..."
