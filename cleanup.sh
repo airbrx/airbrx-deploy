@@ -224,28 +224,27 @@ delete_bucket() {
     local bucket_name="$1"
 
     if aws s3api head-bucket --bucket "$bucket_name" 2>/dev/null; then
-        print_step "Emptying bucket: $bucket_name"
+        print_step "Deleting bucket: $bucket_name"
+
+        # Empty bucket (handles current objects)
         aws s3 rm "s3://${bucket_name}" --recursive 2>/dev/null || true
 
-        # Delete versioned objects too
-        print_step "Removing versioned objects..."
-        aws s3api list-object-versions --bucket "$bucket_name" --query 'Versions[].{Key:Key,VersionId:VersionId}' --output json 2>/dev/null | \
-            jq -c '.[]' 2>/dev/null | while read -r obj; do
-                key=$(echo "$obj" | jq -r '.Key')
-                version=$(echo "$obj" | jq -r '.VersionId')
-                aws s3api delete-object --bucket "$bucket_name" --key "$key" --version-id "$version" 2>/dev/null || true
-            done
+        # Delete all object versions and delete markers (required for versioned buckets)
+        local versions=$(aws s3api list-object-versions --bucket "$bucket_name" \
+            --query '[Versions[].{Key:Key,VersionId:VersionId}, DeleteMarkers[].{Key:Key,VersionId:VersionId}][]' \
+            --output json 2>/dev/null)
 
-        # Delete delete markers
-        aws s3api list-object-versions --bucket "$bucket_name" --query 'DeleteMarkers[].{Key:Key,VersionId:VersionId}' --output json 2>/dev/null | \
-            jq -c '.[]' 2>/dev/null | while read -r obj; do
-                key=$(echo "$obj" | jq -r '.Key')
-                version=$(echo "$obj" | jq -r '.VersionId')
-                aws s3api delete-object --bucket "$bucket_name" --key "$key" --version-id "$version" 2>/dev/null || true
+        if [[ -n "$versions" && "$versions" != "[]" ]]; then
+            echo "$versions" | jq -c '.[]' 2>/dev/null | while read -r obj; do
+                local key=$(echo "$obj" | jq -r '.Key')
+                local vid=$(echo "$obj" | jq -r '.VersionId')
+                [[ -n "$key" && "$key" != "null" ]] && \
+                    aws s3api delete-object --bucket "$bucket_name" --key "$key" --version-id "$vid" 2>/dev/null || true
             done
+        fi
 
-        print_step "Deleting bucket: $bucket_name"
-        aws s3api delete-bucket --bucket "$bucket_name" 2>/dev/null || true
+        # Delete the bucket
+        aws s3 rb "s3://${bucket_name}" 2>/dev/null || true
         print_success "Deleted: $bucket_name"
     else
         print_step "Bucket not found: $bucket_name"

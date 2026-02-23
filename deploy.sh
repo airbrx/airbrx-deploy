@@ -365,16 +365,18 @@ deploy_lambda() {
 
     # Create function URL if requested
     if [[ "$create_url" == "true" ]]; then
+        # Create URL if it doesn't exist
         if ! aws lambda get-function-url-config --function-name "$func_name" &>/dev/null; then
             aws lambda create-function-url-config --function-name "$func_name" \
                 --auth-type NONE > /dev/null
-
-            aws lambda add-permission --function-name "$func_name" \
-                --statement-id FunctionURLAllowPublicAccess \
-                --action lambda:InvokeFunctionUrl \
-                --principal "*" \
-                --function-url-auth-type NONE &>/dev/null || true
         fi
+
+        # Always ensure public access permission exists
+        aws lambda add-permission --function-name "$func_name" \
+            --statement-id FunctionURLAllowPublicAccess \
+            --action lambda:InvokeFunctionUrl \
+            --principal "*" \
+            --function-url-auth-type NONE &>/dev/null || true
 
         local url=$(aws lambda get-function-url-config --function-name "$func_name" \
             --query 'FunctionUrl' --output text)

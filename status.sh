@@ -108,7 +108,7 @@ check_bucket() {
     local bucket="$1"
     local desc="$2"
 
-    if aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
+    if aws s3api head-bucket --bucket "$bucket" &>/dev/null; then
         local count=$(aws s3 ls "s3://${bucket}" --recursive 2>/dev/null | wc -l | tr -d ' ')
         print_ok "$desc: $bucket ($count objects)"
     else
