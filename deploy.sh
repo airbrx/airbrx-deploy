@@ -134,8 +134,8 @@ print_success "Loaded configuration for: $PREFIX"
 print_step "Region: $AWS_REGION"
 print_step "Git branch: $GIT_BRANCH"
 
-# Derive paths
-GENERATED_DIR="$(dirname "$CONFIG_FILE")"
+# Derive paths (use absolute paths to survive cd)
+GENERATED_DIR="$(cd "$(dirname "$CONFIG_FILE")" && pwd)"
 GOD_PAT_FILE="$GENERATED_DIR/${PREFIX}-god-pat.json"
 
 if [[ ! -f "$GOD_PAT_FILE" ]]; then
