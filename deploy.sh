@@ -522,8 +522,11 @@ if [[ -z "$DIST_ID" || "$DIST_ID" == "None" ]]; then
     "DefaultCacheBehavior": {
         "TargetOriginId": "S3-${APP_BUCKET}",
         "ViewerProtocolPolicy": "redirect-to-https",
-        "AllowedMethods": { "Quantity": 2, "Items": ["GET", "HEAD"] },
-        "CachedMethods": { "Quantity": 2, "Items": ["GET", "HEAD"] },
+        "AllowedMethods": {
+            "Quantity": 2,
+            "Items": ["GET", "HEAD"],
+            "CachedMethods": { "Quantity": 2, "Items": ["GET", "HEAD"] }
+        },
         "Compress": true,
         "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
         "OriginRequestPolicyId": "88a5eaf4-2fd4-4709-b370-b4c650ea3fcf"
