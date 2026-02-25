@@ -289,18 +289,19 @@ cd "$WORK_DIR"
 clone_repo() {
     local repo="$1"
     local target="$2"
+    local branch="${3:-$GIT_BRANCH}"
 
     if [[ -d "$target" ]]; then
         print_step "Already cloned: $target"
     else
-        print_step "Cloning: $repo -> $target"
-        git clone --depth 1 --branch "$GIT_BRANCH" \
+        print_step "Cloning: $repo -> $target (branch: $branch)"
+        git clone --depth 1 --branch "$branch" \
             "https://${GIT_PAT}@github.com/airbrx/${repo}.git" "$target"
     fi
     print_success "Ready: $target"
 }
 
-clone_repo "data-proxy" "data-proxy"
+clone_repo "data-proxy" "data-proxy" "fix/lambda-s3-credentials"
 clone_repo "airbrx-api" "airbrx-api"
 clone_repo "app-airbrx-com" "app-airbrx-com"
 
@@ -418,8 +419,8 @@ build_env_json() {
         local value="$2"
         shift 2
 
-        # Skip empty values or placeholder values
-        if [[ -n "$value" && "$value" != "DESCOPE_NOT_CONFIGURED" && "$value" != "ANTHROPIC_NOT_CONFIGURED" ]]; then
+        # Skip only truly empty values - pass through placeholders so Lambda can detect them
+        if [[ -n "$value" ]]; then
             if [[ "$first" != "true" ]]; then
                 json+=','
             fi
@@ -445,6 +446,7 @@ API_ENV=$(build_env_json \
     "AWS_ADMIN_BUCKET" "${ADMIN_BUCKET}" \
     "AWS_ADMIN_REGION" "${AWS_REGION}" \
     "AIRBRX_CONFIG_STORAGE_TYPE" "s3" \
+    "STORAGE_FACTORY_PATH" "./StorageFactory/StorageFactory" \
     "LOG_SUMMARY_LAMBDA_ARN" "${PREFIX}-airbrx-log-summary" \
     "AIRBRX_JWT_SECRET" "${JWT_SECRET}" \
     "AIRBRX_JWT_EXPIRY" "7d" \
@@ -461,14 +463,14 @@ API_URL=$(deploy_lambda "$API_FUNC" "$API_ROLE_ARN" "reportingapi.handler" \
 GATEWAY_FUNC="${PREFIX}-airbrx-gateway"
 GATEWAY_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${GATEWAY_ROLE}"
 GATEWAY_ENV=$(build_env_json \
-    "AWS_S3_BUCKET" "${GATEWAY_BUCKET}" \
+    "AIRBRX_S3_BUCKET" "${GATEWAY_BUCKET}" \
     "AIRBRX_CONFIG_STORAGE_TYPE" "s3" \
     "AIRBRX_CONFIG_API_URL" "${API_URL}" \
     "AIRBRX_CONFIG_API_TOKEN" "${GOD_PAT}" \
     "AIRBRX_LOG_LEVEL" "info" \
 )
 
-GATEWAY_URL=$(deploy_lambda "$GATEWAY_FUNC" "$GATEWAY_ROLE_ARN" "data-proxy.handler" \
+GATEWAY_URL=$(deploy_lambda "$GATEWAY_FUNC" "$GATEWAY_ROLE_ARN" "lambda-handler.handler" \
     "$WORK_DIR/gateway.zip" 1024 60 "$GATEWAY_ENV" "true")
 
 # Deploy Log Summary Lambda (no URL)
@@ -718,6 +720,7 @@ API_ENV_FINAL=$(build_env_json \
     "AWS_ADMIN_BUCKET" "${ADMIN_BUCKET}" \
     "AWS_ADMIN_REGION" "${AWS_REGION}" \
     "AIRBRX_CONFIG_STORAGE_TYPE" "s3" \
+    "STORAGE_FACTORY_PATH" "./StorageFactory/StorageFactory" \
     "LOG_SUMMARY_LAMBDA_ARN" "${PREFIX}-airbrx-log-summary" \
     "AIRBRX_JWT_SECRET" "${JWT_SECRET}" \
     "AIRBRX_JWT_EXPIRY" "7d" \
@@ -744,8 +747,8 @@ print_step "Uploading God PAT..."
 aws s3 cp "$GOD_PAT_FILE" "s3://${ADMIN_BUCKET}/pats/${GOD_PAT}.json"
 print_success "Uploaded: s3://${ADMIN_BUCKET}/pats/${GOD_PAT}.json"
 
-# Create initial tenant config
-GATEWAY_FQDN=$(echo "$GATEWAY_URL" | sed 's|https://||' | sed 's|/$||')
+# Create initial tenant config (use CloudFront URL, not Lambda URL)
+GATEWAY_FQDN=$(echo "$GATEWAY_CF_URL" | sed 's|https://||' | sed 's|/$||')
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
 print_step "Creating tenant configuration..."

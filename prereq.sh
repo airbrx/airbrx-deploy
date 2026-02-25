@@ -589,12 +589,11 @@ echo "  - Press Enter to skip"
 echo ""
 
 read -p "Slack Webhook URL (or press Enter to skip): " SLACK_WEBHOOK
-SLACK_WEBHOOK="${SLACK_WEBHOOK:-}"
-
-if [[ -n "$SLACK_WEBHOOK" ]]; then
-    print_success "Slack webhook configured"
+if [[ -z "$SLACK_WEBHOOK" ]]; then
+    SLACK_WEBHOOK="SLACK_NOT_CONFIGURED"
+    print_step "Slack notifications disabled (using placeholder)"
 else
-    print_step "Slack notifications disabled"
+    print_success "Slack webhook configured"
 fi
 
 print_success "API configuration complete"
